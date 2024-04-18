@@ -3,6 +3,7 @@
  */
 
 #include "riscv.h"
+#include "string.h"
 #include "process.h"
 #include "strap.h"
 #include "syscall.h"
@@ -51,6 +52,7 @@ void handle_mtimer_trap() {
 //
 void handle_user_page_fault(uint64 mcause, uint64 sepc, uint64 stval) {
   uint64 pa_t;
+  pte_t *pte;
   sprint("handle_page_fault: %lx\n", stval);
   switch (mcause) {
     case CAUSE_STORE_PAGE_FAULT:
@@ -58,8 +60,24 @@ void handle_user_page_fault(uint64 mcause, uint64 sepc, uint64 stval) {
       // dynamically increase application stack.
       // hint: first allocate a new physical page, and then, maps the new page to the
       // virtual address that causes the page fault.
-      if (!(pa_t = (uint64)alloc_page())) panic("Page fault!\n");
-      map_pages(current->pagetable, ROUNDDOWN(stval, PGSIZE), PGSIZE, pa_t, prot_to_type(PROT_READ | PROT_WRITE, 1));
+      pte = page_walk(current->pagetable, stval, 0);
+      if (!pte) {
+        if (!(pa_t = (uint64)alloc_page())) panic("Page fault!\n");
+        map_pages(current->pagetable, ROUNDDOWN(stval, PGSIZE), PGSIZE, pa_t, prot_to_type(PROT_READ | PROT_WRITE, 1));
+      } else if (*pte & PTE_C) {
+        pa_t = PTE2PA(*pte);
+        for (uint64 heap_block = current->parent->user_heap.heap_bottom; heap_block < current->parent->user_heap.heap_top; heap_block += PGSIZE) {
+          uint64 heap_block_pa = lookup_pa(current->pagetable, heap_block);
+          if (heap_block_pa >= pa_t && heap_block_pa < pa_t + PGSIZE) {
+            user_vm_unmap(current->pagetable, heap_block, PGSIZE, 0);
+            void *child_pa = alloc_page();
+            pte_t *child_pte = page_walk(current->pagetable, heap_block, 0);
+            *child_pte = (*child_pte | (~PTE_C)) & (PTE_W | PTE_R);
+            user_vm_map(current->pagetable, heap_block, PGSIZE, (uint64)child_pa, prot_to_type(PROT_WRITE | PROT_READ, 1));
+            memcpy(child_pa, (void *)lookup_pa(current->parent->pagetable, heap_block), PGSIZE);
+          }
+        }
+      }
       break;
     default:
       sprint("unknown page fault.\n");

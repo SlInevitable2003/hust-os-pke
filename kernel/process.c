@@ -204,7 +204,6 @@ int do_fork( process* parent)
           free_block_filter[index] = 1;
         }
         {
-          int free_block_filter[MAX_HEAP_PAGES];
           memset(free_block_filter, 0, MAX_HEAP_PAGES);
           uint64 heap_bottom = parent->user_heap.heap_bottom;
           for (int i = 0; i < parent->user_heap.free_pages_count; i++) {
@@ -218,10 +217,14 @@ int do_fork( process* parent)
             if (free_block_filter[(heap_block - heap_bottom) / PGSIZE])  // skip free blocks
               continue;
 
-            void* child_pa = alloc_page();
-            memcpy(child_pa, (void*)lookup_pa(parent->pagetable, heap_block), PGSIZE);
-            user_vm_map((pagetable_t)child->pagetable, heap_block, PGSIZE, (uint64)child_pa,
+            // void* child_pa = alloc_page();
+            // memcpy(child_pa, (void*)lookup_pa(parent->pagetable, heap_block), PGSIZE);
+            user_vm_map((pagetable_t)child->pagetable, heap_block, PGSIZE, (uint64)lookup_pa(parent->pagetable, heap_block),
                         prot_to_type(PROT_WRITE | PROT_READ, 1));
+            pte_t *child_pte = page_walk(child->pagetable, heap_block, 0);
+            *child_pte = (*child_pte | PTE_C) & (~PTE_W);
+            // pte_t *parent_pte = page_walk(parent->pagetable, heap_block, 0);
+            // *parent_pte &= (~PTE_W);
           }
 
           child->mapped_info[HEAP_SEGMENT].npages = parent->mapped_info[HEAP_SEGMENT].npages;
@@ -245,7 +248,7 @@ int do_fork( process* parent)
                   parent->mapped_info[CODE_SEGMENT].npages * PGSIZE,
                   lookup_pa(parent->pagetable, parent->mapped_info[CODE_SEGMENT].va),
                   prot_to_type(PROT_READ | PROT_EXEC, 1));
-        sprint("do_folk map code segment at pa:0x%lx of parent to child at va:0x%lx.\n", lookup_pa(parent->pagetable, parent->mapped_info[CODE_SEGMENT].va), parent->mapped_info[CODE_SEGMENT].va);
+        sprint("do_fork map code segment at pa:0x%lx of parent to child at va:0x%lx.\n", lookup_pa(parent->pagetable, parent->mapped_info[CODE_SEGMENT].va), parent->mapped_info[CODE_SEGMENT].va);
 
         // after mapping, register the vm region (do not delete codes below!)
         child->mapped_info[child->total_mapped_region].va = parent->mapped_info[i].va;
